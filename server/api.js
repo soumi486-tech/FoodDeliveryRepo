@@ -5,7 +5,10 @@ import { HttpError, route, customerId, attachUser } from './http.js';
 import { computeTotals } from '../shared/pricing.js';
 import { CANCELLABLE, STATUSES, statusForAge } from '../shared/status.js';
 
+import { requestTelemetry, biz } from './telemetry.js'; // eslint-disable-line no-unused-vars
+
 export const api = Router();
+api.use(requestTelemetry); // request metrics + access log
 api.use(express.json());
 api.use(attachUser); // sets req.user from the session cookie (null when signed out)
 
@@ -77,17 +80,19 @@ async function loadOrder(db, id, owner) {
 // Demo simulator: there is no kitchen or courier, so status advances with elapsed time.
 // Locked + re-checked inside a transaction, so concurrent GETs record each step exactly once.
 async function advanceDemoStatus(id) {
-  await withTransaction(async (tx) => {
+  const delivered = await withTransaction(async (tx) => {
     const { rows } = await tx.query('SELECT status, created_at FROM orders WHERE id = $1 FOR UPDATE', [id]);
     const o = rows[0];
-    if (!o || o.status === 'cancelled') return;
+    if (!o || o.status === 'cancelled') return false;
     const age = (Date.now() - new Date(o.created_at).getTime()) / 1000;
     const from = STATUSES.indexOf(o.status);
     const to = STATUSES.indexOf(statusForAge(age));
-    if (to <= from) return;
+    if (to <= from) return false;
     for (let i = from + 1; i <= to; i++) await tx.query('INSERT INTO order_events (order_id, status) VALUES ($1, $2)', [id, STATUSES[i]]);
     await tx.query('UPDATE orders SET status = $2 WHERE id = $1', [id, STATUSES[to]]);
+    return STATUSES[to] === 'delivered';
   });
+  if (delivered) biz.delivered.add(1); // counted once: only the request that wrote the step gets true
 }
 
 api.get('/orders', route(async (req, res) => {
@@ -134,6 +139,8 @@ api.post('/orders', route(async (req, res) => {
   if (last4 !== null && !/^\d{4}$/.test(last4)) throw new HttpError(400, 'Only the last 4 card digits are accepted');
 
   const orderId = newOrderId();
+  let orderTotal = 0;
+  try {
   await withTransaction(async (tx) => {
     const r = await tx.query('SELECT * FROM restaurants WHERE id = $1', [restaurantId]);
     if (!r.rows[0]) throw new HttpError(400, 'Unknown restaurant');
@@ -168,7 +175,14 @@ api.post('/orders', route(async (req, res) => {
         [orderId, l.id, l.name, l.price, l.qty, l.emoji]);
     }
     await tx.query("INSERT INTO order_events (order_id, status) VALUES ($1, 'placed')", [orderId]);
+    orderTotal = totals.total;
   });
+  } catch (err) {
+    if (err.status === 409) biz.conflicts.add(1); // closed / unavailable / below minimum
+    throw err;
+  }
+  biz.created.add(1, { fulfilment });
+  biz.value.record(orderTotal, { fulfilment });
   res.status(201).json(await loadOrder(pool, orderId, owner));
 }));
 
@@ -182,6 +196,7 @@ api.post('/orders/:id/cancel', route(async (req, res) => {
     await tx.query("UPDATE orders SET status = 'cancelled' WHERE id = $1", [req.params.id]);
     await tx.query("INSERT INTO order_events (order_id, status) VALUES ($1, 'cancelled')", [req.params.id]);
   });
+  biz.cancelled.add(1);
   res.json(await loadOrder(pool, req.params.id, owner));
 }));
 

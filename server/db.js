@@ -1,5 +1,6 @@
 // Postgres access via Neon's serverless driver. Pool speaks the node-postgres
 // API over WebSockets and supports interactive transactions.
+import { trace, SpanStatusCode } from '@opentelemetry/api';
 import { Pool } from '@neondatabase/serverless';
 import { schema } from './schema.js';
 import { seed } from './seed.js';
@@ -17,7 +18,7 @@ export async function migrate() {
   await seed(pool, withTransaction);
 }
 
-export async function withTransaction(fn) {
+async function runTransaction(fn) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -30,4 +31,19 @@ export async function withTransaction(fn) {
   } finally {
     client.release();
   }
+}
+
+// Observability: every transaction is a span. Neon's driver (and most non-pg drivers) is not auto-instrumented.
+export function withTransaction(fn) {
+  return trace.getTracer('db').startActiveSpan('db.transaction', async (span) => {
+    try {
+      return await runTransaction(fn);
+    } catch (err) {
+      span.recordException(err);
+      span.setStatus({ code: SpanStatusCode.ERROR, message: err.message });
+      throw err;
+    } finally {
+      span.end();
+    }
+  });
 }

@@ -2,6 +2,7 @@
 //   node server/index.js --dev   -> Vite runs inside Express (hot reload)
 //   node server/index.js         -> serves the built app from dist/
 import './env.js'; // must stay the first import
+import './instrumentation.js'; // observability: must stay right after env.js, before express/db
 import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';

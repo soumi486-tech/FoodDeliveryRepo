@@ -1,0 +1,86 @@
+{
+  "app": "FoodDash",
+  "slug": "fooddash",
+  "prefix": "fooddash",
+  "noun": "order",
+  "counters": [
+    {
+      "key": "created",
+      "name": "orders_created",
+      "description": "Food orders placed"
+    },
+    {
+      "key": "cancelled",
+      "name": "orders_cancelled",
+      "description": "Orders cancelled"
+    },
+    {
+      "key": "delivered",
+      "name": "orders_delivered",
+      "description": "Orders that reached the delivered status"
+    },
+    {
+      "key": "conflicts",
+      "name": "order_rejections",
+      "description": "Orders rejected (item unavailable / restaurant closed / mixed restaurants)"
+    }
+  ],
+  "histograms": [
+    {
+      "key": "value",
+      "name": "order_value",
+      "description": "Order total (currency units)"
+    }
+  ],
+  "loadtest": {
+    "auth": true,
+    "readPaths": [
+      "/restaurants",
+      "/health"
+    ],
+    "detail": {
+      "list": "/restaurants",
+      "path": "/restaurants/{id}"
+    },
+    "authedReadPaths": [
+      "/orders"
+    ],
+    "notFoundPath": "/restaurants/does-not-exist",
+    "badRequest": {
+      "method": "POST",
+      "path": "/orders",
+      "body": {
+        "items": []
+      }
+    },
+    "conflict": {
+      "method": "POST",
+      "path": "/orders",
+      "body": {
+        "restaurantId": "r1",
+        "fulfilment": "pickup",
+        "items": [
+          {
+            "id": "m1",
+            "qty": 1
+          }
+        ]
+      }
+    },
+    "realWrite": {
+      "method": "POST",
+      "path": "/orders",
+      "max": 10,
+      "body": {
+        "restaurantId": "r1",
+        "fulfilment": "pickup",
+        "items": [
+          {
+            "id": "m1",
+            "qty": 2
+          }
+        ]
+      }
+    }
+  }
+}
